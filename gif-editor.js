@@ -1256,7 +1256,7 @@ async function checkPendingRecording() {
 // =====================================================================
 // The worker ships with the app, so it is same-origin: gif.js can load it
 // directly, with no fetch that could fail when the network is flaky.
-const WORKER_URL = 'lib/gif.worker.js?v=4';
+const WORKER_URL = 'lib/gif.worker.js?v=5';
 
 async function exportGif() {
   if (state.ui.state !== 'editing' || !validTrim()) return;

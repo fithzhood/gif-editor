@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>GIF Editor</title>
-  <link rel="stylesheet" href="gif-editor.css?v=4">
+  <link rel="stylesheet" href="gif-editor.css?v=5">
 </head>
 <body>
   <!-- single hidden file input reused by every "load" control (multiple files) -->
@@ -259,13 +259,13 @@
   <!-- Both libraries are served from this site, not a CDN: one less thing that
        can fail (an unreachable CDN used to break Export). -->
   <!-- gif.js (encoder) exposes window.GIF -->
-  <script src="lib/gif.js?v=4"></script>
+  <script src="lib/gif.js?v=5"></script>
   <!-- gifuct-js (decoder): CommonJS upstream, so we ship a self-contained ESM bundle -->
   <script type="module">
-    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=4';
+    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=5';
     window.gifuct = { parseGIF, decompressFrames };
     window.dispatchEvent(new Event('gifuct-ready'));
   </script>
-  <script src="gif-editor.js?v=4"></script>
+  <script src="gif-editor.js?v=5"></script>
 </body>
 </html>
