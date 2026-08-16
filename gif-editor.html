@@ -6,11 +6,11 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>GIF Editor</title>
-  <link rel="stylesheet" href="gif-editor.css?v=2">
+  <link rel="stylesheet" href="gif-editor.css?v=3">
 </head>
 <body>
   <!-- single hidden file input reused by every "load" control (multiple files) -->
-  <input type="file" id="file-input" accept=".gif,image/gif,.webp,image/webp" multiple hidden>
+  <input type="file" id="file-input" accept=".gif,image/gif,.webp,image/webp,.mp4,.m4v,.mov,.webm,video/*" multiple hidden>
 
   <header class="app-header">
     <button id="reset-btn" class="hdr-btn" hidden>＋ Aggiungi</button>
@@ -23,7 +23,7 @@
     <!-- EMPTY -->
     <section id="view-empty" class="view">
       <div class="center-stack">
-        <p class="empty-msg">Carica una o più GIF o WebP dal tuo telefono per ritagliarle, tagliarne i frame, cambiarne la velocità e specchiarle. L'esportazione è sempre in GIF.</p>
+        <p class="empty-msg">Carica GIF, WebP o un video dal tuo telefono per ritagliarli, tagliarne i frame, cambiarne la velocità e specchiarli. L'esportazione è sempre in GIF.</p>
         <label for="file-input" class="upload-btn">📁 Scegli i file</label>
         <p id="empty-error" class="inline-error" hidden></p>
       </div>
@@ -53,6 +53,70 @@
         <p class="picker-title">Le tue GIF — tocca per modificare</p>
         <div class="picker-grid" id="picker-grid"></div>
         <label for="file-input" class="btn-secondary picker-add">＋ Aggiungi altre GIF</label>
+      </div>
+    </section>
+
+    <!-- VIDEO: pick which slice of the video becomes frames, and how many.
+         Every choice here is priced in memory before a single frame is decoded. -->
+    <section id="view-video" class="view" hidden>
+      <div class="vimport">
+        <div class="vstage">
+          <video id="video-preview" muted playsinline preload="auto"></video>
+        </div>
+
+        <div class="vcontrols">
+          <div class="control-head">
+            <span class="control-label">Inizio</span>
+            <span id="video-start-readout" class="control-value">0,0 s</span>
+          </div>
+          <div class="slider-row">
+            <button class="step-btn" data-vstep="start" data-dir="-1" aria-label="Inizio precedente">◀</button>
+            <input type="range" id="video-start" min="0" max="0" step="0.1" value="0">
+            <button class="step-btn" data-vstep="start" data-dir="1" aria-label="Inizio successivo">▶</button>
+          </div>
+
+          <div class="control-head">
+            <span class="control-label">Durata</span>
+            <span id="video-dur-readout" class="control-value">5,0 s</span>
+          </div>
+          <div class="slider-row">
+            <button class="step-btn" data-vstep="dur" data-dir="-1" aria-label="Durata minore">◀</button>
+            <input type="range" id="video-dur" min="0.5" max="10" step="0.5" value="5">
+            <button class="step-btn" data-vstep="dur" data-dir="1" aria-label="Durata maggiore">▶</button>
+          </div>
+
+          <p class="row-label">Fotogrammi al secondo</p>
+          <div class="chip-row" id="video-fps-chips">
+            <button class="chip" data-fps="6">6</button>
+            <button class="chip active" data-fps="10">10</button>
+            <button class="chip" data-fps="12">12</button>
+            <button class="chip" data-fps="15">15</button>
+          </div>
+
+          <p class="row-label">Lato massimo</p>
+          <div class="chip-row" id="video-size-chips">
+            <button class="chip" data-side="240">240 px</button>
+            <button class="chip active" data-side="360">360 px</button>
+            <button class="chip" data-side="480">480 px</button>
+          </div>
+
+          <p id="video-estimate" class="vestimate"></p>
+          <p id="video-warning" class="hint" hidden></p>
+        </div>
+
+        <div class="vactions">
+          <button id="video-cancel" class="btn-secondary">Annulla</button>
+          <button id="video-go" class="btn-primary">Estrai fotogrammi</button>
+        </div>
+      </div>
+
+      <div id="video-overlay" class="overlay" hidden>
+        <div class="center-stack">
+          <div class="spinner"></div>
+          <p id="video-progress-text">Estrazione fotogrammi…</p>
+          <div class="progress"><div id="video-progress-bar" class="progress-bar"></div></div>
+          <button id="video-abort" class="btn-secondary">Annulla</button>
+        </div>
       </div>
     </section>
 
@@ -187,13 +251,13 @@
   <!-- Both libraries are served from this site, not a CDN: one less thing that
        can fail (an unreachable CDN used to break Export). -->
   <!-- gif.js (encoder) exposes window.GIF -->
-  <script src="lib/gif.js?v=2"></script>
+  <script src="lib/gif.js?v=3"></script>
   <!-- gifuct-js (decoder): CommonJS upstream, so we ship a self-contained ESM bundle -->
   <script type="module">
-    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=2';
+    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=3';
     window.gifuct = { parseGIF, decompressFrames };
     window.dispatchEvent(new Event('gifuct-ready'));
   </script>
-  <script src="gif-editor.js?v=2"></script>
+  <script src="gif-editor.js?v=3"></script>
 </body>
 </html>

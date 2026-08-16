@@ -37,9 +37,25 @@ const el = {
     empty: document.getElementById('view-empty'),
     loading: document.getElementById('view-loading'),
     picker: document.getElementById('view-picker'),
+    video: document.getElementById('view-video'),
     editing: document.getElementById('view-editing'),
     error: document.getElementById('view-error')
   },
+  videoEl: document.getElementById('video-preview'),
+  videoStart: document.getElementById('video-start'),
+  videoDur: document.getElementById('video-dur'),
+  videoStartReadout: document.getElementById('video-start-readout'),
+  videoDurReadout: document.getElementById('video-dur-readout'),
+  videoFpsChips: Array.from(document.querySelectorAll('#video-fps-chips .chip')),
+  videoSizeChips: Array.from(document.querySelectorAll('#video-size-chips .chip')),
+  videoEstimate: document.getElementById('video-estimate'),
+  videoWarning: document.getElementById('video-warning'),
+  videoSteps: Array.from(document.querySelectorAll('.step-btn[data-vstep]')),
+  videoCancel: document.getElementById('video-cancel'),
+  videoGo: document.getElementById('video-go'),
+  videoOverlay: document.getElementById('video-overlay'),
+  videoProgressBar: document.getElementById('video-progress-bar'),
+  videoProgressText: document.getElementById('video-progress-text'),
   pickerGrid: document.getElementById('picker-grid'),
   fileInput: document.getElementById('file-input'),
   emptyError: document.getElementById('empty-error'),
@@ -150,12 +166,26 @@ function ensureGifuct() {
   return new Promise(resolve => window.addEventListener('gifuct-ready', resolve, { once: true }));
 }
 
-// Decode one or more selected GIF files into projects, then either open the
-// single one or show the picker.
+function isVideoFile(f) {
+  return /^video\//.test(f.type) || /\.(mp4|m4v|mov|webm|mkv|3gp)$/i.test(f.name);
+}
+
+// Route the selection: videos go to the import screen, images are decoded into
+// projects and either opened or offered in the picker.
 async function handleFiles(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
   el.emptyError.hidden = true;
+
+  // A video doesn't become a project directly: it goes through the import
+  // screen, where the user sizes the job before any frame is decoded.
+  const videos = files.filter(isVideoFile);
+  if (videos.length) {
+    if (files.length > videos.length) showToast('I video si importano uno alla volta');
+    else if (videos.length > 1) showToast('Importo il primo video: uno alla volta');
+    openVideoImport(videos[0]);
+    return;
+  }
 
   setState('loading');
   try {
@@ -868,11 +898,280 @@ function updateExportEnabled() {
 }
 
 // =====================================================================
+// Video import
+// =====================================================================
+// This whole section exists to keep memory bounded. A decoded frame costs
+// width*height*4 bytes and every frame stays resident for the session, so a
+// phone screen recording (1080x2400 = 10 MB per frame) would pass a gigabyte in
+// a few seconds. Two rules follow:
+//   1. frames are drawn straight to their final size — a full-resolution bitmap
+//      is never kept, only the <video> element's own current frame;
+//   2. the frame count is capped by a pixel budget, and the duration slider
+//      shrinks to match, so the limit is visible before anything is decoded.
+const VIDEO_BUDGET_PX = 24e6;      // ~96 MB of ImageData for the whole clip
+const VIDEO_MAX_FRAMES = 300;
+const VIDEO_MAX_SECONDS = 20;
+const SEEK_TIMEOUT_MS = 8000;
+// Measured: 0,46 B/px on real video, 0,51 on synthetic noise, far less on flat
+// content. Deliberately near the top of that range — an estimate that promises a
+// small file and delivers a big one is the wrong way to be wrong.
+const GIF_BYTES_PER_PX = 0.45;
+
+const vimp = {
+  file: null, url: null,
+  duration: 0, vw: 0, vh: 0,
+  start: 0, dur: 5, fps: 10, side: 360,
+  pendingSeek: null, busy: false, cancelled: false
+};
+
+function openVideoImport(file) {
+  releaseVideo();
+  vimp.file = file;
+  vimp.url = URL.createObjectURL(file);
+  vimp.start = 0; vimp.dur = 5;
+  // Clear the previous clip's numbers: until the new metadata lands they would
+  // make the screen quote a duration and a frame count from the wrong video.
+  vimp.duration = 0; vimp.vw = 0; vimp.vh = 0;
+  vimp.cancelled = false;
+  setState('video');
+  el.videoGo.disabled = true;
+  el.videoWarning.hidden = true;
+  el.videoEstimate.textContent = 'Lettura del video…';
+
+  const v = el.videoEl;
+  v.addEventListener('loadedmetadata', () => {
+    vimp.duration = (isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
+    vimp.vw = v.videoWidth; vimp.vh = v.videoHeight;
+    if (!vimp.duration || !vimp.vw || !vimp.vh) {
+      videoFail('Non riesco a leggere questo video su questo dispositivo');
+      return;
+    }
+    vimp.dur = Math.min(5, vimp.duration);
+    el.videoGo.disabled = false;
+    updateVideoUI();
+    seekPreview(0);
+  }, { once: true });
+  v.addEventListener('error', () => videoFail('Non riesco a leggere questo video su questo dispositivo'), { once: true });
+  v.src = vimp.url;
+}
+
+function videoFail(msg) {
+  releaseVideo();
+  showError(msg);
+}
+
+// Drop the decoder, the buffers and the blob URL. A held <video> src keeps a
+// whole decode pipeline alive, which is exactly what we can't afford.
+function releaseVideo() {
+  const v = el.videoEl;
+  try { v.pause(); } catch (_) {}
+  v.removeAttribute('src');
+  try { v.load(); } catch (_) {}
+  if (vimp.url) { URL.revokeObjectURL(vimp.url); vimp.url = null; }
+  vimp.file = null;
+  vimp.busy = false;
+  vimp.pendingSeek = null;
+  el.videoOverlay.hidden = true;
+}
+
+function cancelVideoImport() {
+  if (vimp.busy) { vimp.cancelled = true; return; }   // the loop closes up itself
+  releaseVideo();
+  if (state.projects.length) reopenAfterLoad();
+  else setState('empty');
+}
+
+// Output size: fit the long side to the chosen limit, never upscale, keep even
+// numbers (kinder to the encoder).
+function videoOutSize() {
+  const s = Math.min(1, vimp.side / Math.max(vimp.vw, vimp.vh));
+  return {
+    w: Math.max(2, Math.round(vimp.vw * s / 2) * 2),
+    h: Math.max(2, Math.round(vimp.vh * s / 2) * 2)
+  };
+}
+
+// The whole job priced out before any decoding happens.
+function videoPlan() {
+  const o = videoOutSize();
+  const px = o.w * o.h;
+  // GIF stores delays in hundredths of a second. Quantise there and sample the
+  // video at exactly that spacing, so the GIF runs at true real-time speed.
+  const delayMs = Math.max(20, Math.round(1000 / vimp.fps / 10) * 10);
+  const step = delayMs / 1000;
+  const capFrames = Math.max(1, Math.min(VIDEO_MAX_FRAMES, Math.floor(VIDEO_BUDGET_PX / px)));
+  const room = Math.max(0, vimp.duration - vimp.start);
+  const maxSeconds = Math.max(step, Math.min(VIDEO_MAX_SECONDS, room, capFrames * step));
+  const dur = Math.min(vimp.dur, maxSeconds);
+  const n = Math.max(1, Math.min(capFrames, Math.round(dur / step)));
+  return {
+    o, px, delayMs, step, n, capFrames, maxSeconds, dur,
+    memMB: n * px * 4 / 1048576,
+    estMB: n * px * GIF_BYTES_PER_PX / 1048576
+  };
+}
+
+const fmt1 = n => n.toFixed(1).replace('.', ',');
+
+function updateVideoUI() {
+  const p = videoPlan();
+
+  el.videoStart.max = Math.max(0, (vimp.duration - p.step)).toFixed(2);
+  el.videoStart.value = vimp.start;
+  // The ceiling moves with the settings: more pixels or more frames per second
+  // means less time fits in the budget.
+  el.videoDur.max = p.maxSeconds.toFixed(2);
+  if (vimp.dur > p.maxSeconds) vimp.dur = p.maxSeconds;
+  el.videoDur.value = vimp.dur;
+
+  el.videoStartReadout.textContent = fmt1(vimp.start) + ' s';
+  el.videoDurReadout.textContent = fmt1(p.dur) + ' s';
+
+  el.videoEstimate.innerHTML =
+    `<b>${p.n} fotogrammi</b> · ${p.o.w}×${p.o.h} px<br>` +
+    `${Math.round(p.memMB)} MB in memoria · GIF stimata ≈${fmt1(p.estMB)} MB`;
+
+  const capped = p.maxSeconds < Math.min(VIDEO_MAX_SECONDS, vimp.duration - vimp.start) - 0.05;
+  el.videoWarning.hidden = !capped;
+  if (capped) {
+    el.videoWarning.textContent =
+      `Con queste impostazioni il massimo è ${fmt1(p.maxSeconds)} s. Per andare oltre, riduci il lato massimo o i fotogrammi al secondo.`;
+  }
+
+  el.videoSteps.forEach(b => {
+    const dir = parseInt(b.dataset.dir, 10);
+    b.disabled = b.dataset.vstep === 'start'
+      ? (dir < 0 ? vimp.start <= 0 : vimp.start >= parseFloat(el.videoStart.max))
+      : (dir < 0 ? vimp.dur <= 0.5 : vimp.dur >= p.maxSeconds - 0.001);
+  });
+}
+
+// Show the frame at `t` while the user drags. Only one seek is ever in flight;
+// the latest requested time wins when it lands.
+function seekPreview(t) {
+  if (!vimp.duration) return;
+  const v = el.videoEl;
+  vimp.pendingSeek = clamp(t, 0, Math.max(0, vimp.duration - 0.05));
+  if (v.seeking) return;
+  try { v.currentTime = vimp.pendingSeek; } catch (_) {}
+}
+
+function onVideoStartInput() {
+  vimp.start = parseFloat(el.videoStart.value) || 0;
+  updateVideoUI();
+  seekPreview(vimp.start);
+}
+
+function onVideoDurInput() {
+  vimp.dur = parseFloat(el.videoDur.value) || 0.5;
+  updateVideoUI();
+}
+
+function stepVideo(which, dir) {
+  if (which === 'start') { vimp.start = clamp(vimp.start + dir * 0.1, 0, parseFloat(el.videoStart.max) || 0); seekPreview(vimp.start); }
+  else vimp.dur = clamp(vimp.dur + dir * 0.5, 0.5, videoPlan().maxSeconds);
+  updateVideoUI();
+}
+
+function setVideoProgress(done, total) {
+  const pct = total ? Math.round(done / total * 100) : 0;
+  el.videoProgressBar.style.width = pct + '%';
+  el.videoProgressText.textContent = `Estrazione fotogramma ${done} di ${total}…`;
+}
+
+// Seek and wait for the frame to actually be there. Resolves immediately when
+// we're already parked on that timestamp, because no 'seeked' event would come.
+function seekExact(v, t) {
+  return new Promise((resolve, reject) => {
+    if (Math.abs(v.currentTime - t) < 0.001 && v.readyState >= 2) { resolve(); return; }
+    let done = false;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      v.removeEventListener('seeked', onSeeked);
+      clearTimeout(timer);
+      if (ok) resolve(); else reject(new Error('seek timeout'));
+    };
+    const onSeeked = () => finish(true);
+    const timer = setTimeout(() => finish(false), SEEK_TIMEOUT_MS);
+    v.addEventListener('seeked', onSeeked);
+    try { v.currentTime = t; } catch (_) { finish(false); }
+  });
+}
+
+// Small JPEG of the first frame, used as the gallery thumbnail: a video has no
+// image file to point at, and a full-size data URL would be pointlessly heavy.
+function makeThumb(src) {
+  const t = document.createElement('canvas');
+  const s = Math.min(1, 160 / Math.max(src.width, src.height));
+  t.width = Math.max(1, Math.round(src.width * s));
+  t.height = Math.max(1, Math.round(src.height * s));
+  t.getContext('2d').drawImage(src, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', 0.7);
+}
+
+async function importVideoFrames() {
+  if (vimp.busy || !vimp.duration) return;
+  const p = videoPlan();
+  vimp.busy = true;
+  vimp.cancelled = false;
+  vimp.pendingSeek = null;
+  el.videoOverlay.hidden = false;
+  setVideoProgress(0, p.n);
+
+  const v = el.videoEl;
+  const c = document.createElement('canvas');
+  c.width = p.o.w; c.height = p.o.h;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+
+  const frames = [];
+  let thumb = '';
+  try {
+    // Some Android WebViews paint nothing until playback has run once.
+    try { await v.play(); v.pause(); } catch (_) {}
+
+    for (let i = 0; i < p.n && !vimp.cancelled; i++) {
+      const t = Math.min(vimp.start + i * p.step, Math.max(0, vimp.duration - 0.02));
+      await seekExact(v, t);
+      // Scaled on the way in: the full-resolution pixels are never stored.
+      cx.drawImage(v, 0, 0, p.o.w, p.o.h);
+      frames.push({ imageData: cx.getImageData(0, 0, p.o.w, p.o.h), delay: p.delayMs });
+      if (i === 0) thumb = makeThumb(c);
+      setVideoProgress(i + 1, p.n);
+    }
+
+    if (vimp.cancelled) {
+      frames.length = 0;
+      vimp.busy = false;
+      el.videoOverlay.hidden = true;
+      showToast('Importazione annullata');
+      return;
+    }
+    if (!frames.length) throw new Error('no frames');
+
+    const meta = { width: p.o.w, height: p.o.h, frameCount: frames.length };
+    const name = vimp.file.name.replace(/\.[^.]+$/, '') + '.gif';
+    state.projects.push({
+      name, url: thumb, frames, meta,
+      edit: defaultEdit(meta), isSingle: frames.length <= 1
+    });
+    releaseVideo();
+    openProject(state.projects.length - 1);
+    showToast(`${frames.length} fotogrammi importati`);
+  } catch (_) {
+    frames.length = 0;
+    vimp.busy = false;
+    el.videoOverlay.hidden = true;
+    showToast('Estrazione non riuscita — prova con meno fotogrammi');
+  }
+}
+
+// =====================================================================
 // Export (gif.js)
 // =====================================================================
 // The worker ships with the app, so it is same-origin: gif.js can load it
 // directly, with no fetch that could fail when the network is flaky.
-const WORKER_URL = 'lib/gif.worker.js?v=2';
+const WORKER_URL = 'lib/gif.worker.js?v=3';
 
 async function exportGif() {
   if (state.ui.state !== 'editing' || !validTrim()) return;
@@ -1102,6 +1401,7 @@ function initCapacitor() {
   App.addListener('backButton', () => {
     if (!el.exportOverlay.hidden) return;                       // busy exporting: ignore
     if (!el.resultOverlay.hidden) { closeResult(); return; }    // result -> editor
+    if (state.ui.state === 'video') { cancelVideoImport(); return; }   // import -> back out
     if (state.ui.state === 'editing' && state.projects.length > 1) { showPicker(); return; } // editor -> gallery
     App.exitApp();                                              // nothing left to pop
   });
@@ -1137,6 +1437,31 @@ el.stretchChips.forEach(ch => ch.addEventListener('click', () => {
   applyStretch(ch.dataset.stretch);
   render();
 }));
+
+el.videoStart.addEventListener('input', onVideoStartInput);
+el.videoDur.addEventListener('input', onVideoDurInput);
+el.videoSteps.forEach(b => b.addEventListener('click',
+  () => stepVideo(b.dataset.vstep, parseInt(b.dataset.dir, 10))));
+el.videoFpsChips.forEach(ch => ch.addEventListener('click', () => {
+  setActiveChip(el.videoFpsChips, ch);
+  vimp.fps = parseInt(ch.dataset.fps, 10);
+  updateVideoUI();
+}));
+el.videoSizeChips.forEach(ch => ch.addEventListener('click', () => {
+  setActiveChip(el.videoSizeChips, ch);
+  vimp.side = parseInt(ch.dataset.side, 10);
+  updateVideoUI();
+}));
+el.videoCancel.addEventListener('click', cancelVideoImport);
+el.videoGo.addEventListener('click', importVideoFrames);
+document.getElementById('video-abort').addEventListener('click', () => { vimp.cancelled = true; });
+// A seek that lands while the finger has already moved on: go to the latest time.
+el.videoEl.addEventListener('seeked', () => {
+  if (vimp.busy || vimp.pendingSeek == null) return;
+  if (Math.abs(el.videoEl.currentTime - vimp.pendingSeek) > 0.05) {
+    try { el.videoEl.currentTime = vimp.pendingSeek; } catch (_) {}
+  }
+});
 
 el.cropReset.addEventListener('click', resetCrop);
 el.errorBack.addEventListener('click', reopenAfterLoad);
