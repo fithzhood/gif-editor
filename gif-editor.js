@@ -50,6 +50,8 @@ const el = {
   panels: Array.from(document.querySelectorAll('.tool-panels .panel')),
   tabs: Array.from(document.querySelectorAll('.tabbar .tab')),
   cropChips: Array.from(document.querySelectorAll('#crop-chips .chip')),
+  cropReset: document.getElementById('crop-reset'),
+  errorBack: document.getElementById('error-back'),
   stretchChips: Array.from(document.querySelectorAll('#stretch-chips .chip')),
   stretchDims: document.getElementById('stretch-dims'),
   rotateLeft: document.getElementById('rotate-left'),
@@ -119,9 +121,12 @@ function showEmptyError(msg) {
   el.emptyError.hidden = false;
 }
 
+// Full-screen error. Only for failures that leave nothing to go back to; a
+// failure with GIFs still loaded offers a way back so the edits aren't lost.
 function showError(msg) {
   el.errorMsg.textContent = msg;
   stopPlayback();
+  el.errorBack.hidden = !state.projects.length;
   setState('error');
 }
 
@@ -389,7 +394,12 @@ function outputSize() {
   const ch = Math.max(1, Math.round(state.edit.crop.height));
   if (!state.edit.stretch) return { w: cw, h: ch };
   // Stretch the cropped content to the chosen ratio (base on crop width).
-  return { w: cw, h: Math.max(1, Math.round(cw / state.edit.stretch)) };
+  // The chip names the ratio of the FINAL image, so when a 90°/270° rotation is
+  // going to swap width and height, aim for the inverse ratio here — otherwise
+  // picking 16:9 and then rotating quietly produced a 9:16 file.
+  const r = state.edit.rotation || 0;
+  const target = (r === 90 || r === 270) ? 1 / state.edit.stretch : state.edit.stretch;
+  return { w: cw, h: Math.max(1, Math.round(cw / target)) };
 }
 
 // Final exported/previewed size, accounting for 90°/270° rotation swapping w/h.
@@ -640,7 +650,7 @@ function onPointerDown(e) {
   dragMode = hitCorner(p) || (insideCrop(p) ? 'move' : null);
   if (!dragMode) return;
   dragStart = { px: p.x, py: p.y, crop: { ...state.edit.crop } };
-  el.canvas.setPointerCapture(e.pointerId);
+  try { el.canvas.setPointerCapture(e.pointerId); } catch (_) {}   // capture is a bonus, never a blocker
   e.preventDefault();
 }
 
@@ -658,8 +668,18 @@ function onPointerMove(e) {
     resizeFree(dragMode, p, s, W, H);
   }
 
-  if (state.isSingleFrame) render();   // no loop running to refresh it
+  requestDragRender();
   e.preventDefault();
+}
+
+let dragRaf = 0;
+
+// Redraw on the display's own cadence while dragging. Leaving it to the playback
+// timer made the crop box follow the finger at the GIF's frame rate, so on a slow
+// GIF (half-second frames) it lagged visibly behind.
+function requestDragRender() {
+  if (dragRaf) return;
+  dragRaf = requestAnimationFrame(() => { dragRaf = 0; render(); });
 }
 
 function resizeFree(mode, p, s, W, H) {
@@ -712,6 +732,18 @@ function parseRatio(s) { const [w, h] = s.split(':').map(Number); return w / h; 
 
 function setActiveChip(group, active) {
   group.forEach(c => c.classList.toggle('active', c === active));
+}
+
+// Back to the whole frame. Without this there was no way out of a bad crop
+// short of loading the file again.
+function resetCrop() {
+  state.edit.crop = { x: 0, y: 0, width: state.meta.width, height: state.meta.height };
+  state.edit.cropAspect = null;
+  state.edit.cropChip = 'free';
+  highlightChip(el.cropChips, 'cropaspect', 'free');
+  syncCanvasSize();
+  updateStretchDims();
+  render();
 }
 
 function applyCropAspect(v) {
@@ -838,15 +870,9 @@ function updateExportEnabled() {
 // =====================================================================
 // Export (gif.js)
 // =====================================================================
-let workerUrl = null;
-
-async function getWorkerUrl() {
-  if (workerUrl) return workerUrl;
-  const resp = await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js');
-  const blob = await resp.blob();
-  workerUrl = URL.createObjectURL(blob);
-  return workerUrl;
-}
+// The worker ships with the app, so it is same-origin: gif.js can load it
+// directly, with no fetch that could fail when the network is flaky.
+const WORKER_URL = 'lib/gif.worker.js?v=2';
 
 async function exportGif() {
   if (state.ui.state !== 'editing' || !validTrim()) return;
@@ -857,10 +883,9 @@ async function exportGif() {
   setExporting(true);
 
   try {
-    const url = await getWorkerUrl();
     const o = finalSize();
 
-    const gif = new GIF({ workers: 2, quality: 10, workerScript: url, width: o.w, height: o.h });
+    const gif = new GIF({ workers: 2, quality: 10, workerScript: WORKER_URL, width: o.w, height: o.h });
 
     gif.on('progress', p => setProgress(p));
     gif.on('finished', blob => {
@@ -883,8 +908,11 @@ async function exportGif() {
     setProgress(0);
     gif.render();
   } catch (err) {
+    // Never leave the editor on a failed export: crop, trim and speed are still
+    // set and the user only needs to press the button again.
     setExporting(false);
-    showError('Errore durante l\'esportazione. Riprova.');
+    showToast('Esportazione non riuscita — riprova');
+    if (wasOnion) setOnion(true); else startPlayback();
   }
 }
 
@@ -1110,6 +1138,8 @@ el.stretchChips.forEach(ch => ch.addEventListener('click', () => {
   render();
 }));
 
+el.cropReset.addEventListener('click', resetCrop);
+el.errorBack.addEventListener('click', reopenAfterLoad);
 el.onionBtn.addEventListener('click', () => setOnion(!state.ui.onion));
 el.trimStart.addEventListener('input', onTrimInput);
 el.trimEnd.addEventListener('input', onTrimInput);
