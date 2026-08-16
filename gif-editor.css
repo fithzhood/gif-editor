@@ -1,0 +1,478 @@
+/* GIF Editor — mobile-first, dark, single-screen (no scroll). */
+
+:root {
+  --bg: #121316;
+  --panel: #1c1e23;
+  --panel-2: #262930;
+  --text: #eef0f4;
+  --muted: #9aa0ac;
+  --accent: #5b8cff;
+  --accent-press: #3f6fe0;
+  --danger: #ff6b6b;
+  --border: #33373f;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+  /* UI is a tool, not a document: no accidental text selection / copy-paste. */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Make the [hidden] attribute win even when a rule sets display. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;         /* everything lives on one screen — no scrolling */
+  overscroll-behavior: none;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  /* svh = viewport height WITH the browser bar shown, so the layout always fits
+     the visible area on mobile Chrome and never gets clipped at the bottom. */
+  height: 100vh;
+  height: 100svh;
+}
+
+/* ---------- Header ---------- */
+.app-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+}
+/* In the Capacitor APK the content is edge-to-edge (under the Android status
+   bar), so push the header down. Uses the real inset when the WebView reports
+   it, with a safe minimum otherwise. Only applies inside the app. */
+body.capacitor .app-header {
+  padding-top: calc(max(env(safe-area-inset-top, 0px), 24px) + 6px);
+}
+.app-header h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.hdr-btn {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hdr-btn.accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.hdr-btn.accent:active { background: var(--accent-press); }
+.hdr-btn.accent:disabled { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
+
+/* ---------- Main / views ---------- */
+.app-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Centered states ---------- */
+.center-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 24px;
+}
+.empty-msg {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+  max-width: 320px;
+  margin: 0;
+}
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 0 28px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+}
+.upload-btn:active { background: var(--accent-press); }
+
+.spinner {
+  width: 44px;
+  height: 44px;
+  border: 4px solid var(--panel-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.inline-error { color: var(--danger); font-size: 15px; margin: 0; }
+.hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  margin: 8px 2px 0;
+}
+
+/* ---------- Picker (multiple GIFs) ---------- */
+.picker {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.picker-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+.picker-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  /* minmax(0,1fr) lets columns shrink so long file names don't push the second
+     column off-screen. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-content: start;
+  -webkit-overflow-scrolling: touch;
+}
+.thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;             /* allow the cell (and its ellipsis name) to shrink */
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+}
+.thumb:active { border-color: var(--accent); }
+.thumb img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  background:
+    linear-gradient(45deg, #202227 25%, transparent 25%, transparent 75%, #202227 75%) 0 0/16px 16px,
+    linear-gradient(45deg, #202227 25%, #191b1f 25%, #191b1f 75%, #202227 75%) 8px 8px/16px 16px,
+    #191b1f;
+  border-radius: 8px;
+}
+.thumb-name {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.picker-add { align-self: center; flex: none; }
+
+/* ---------- Editor layout ---------- */
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Preview fills the space left over — GIF always in the foreground. */
+.preview-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background:
+    linear-gradient(45deg, #202227 25%, transparent 25%, transparent 75%, #202227 75%) 0 0/20px 20px,
+    linear-gradient(45deg, #202227 25%, #191b1f 25%, #191b1f 75%, #202227 75%) 10px 10px/20px 20px,
+    #191b1f;
+}
+#preview {
+  display: block;
+  /* JS (fitPreview) sets explicit width/height so a small crop zooms up to
+     fill this area while keeping the aspect ratio. max-* are a safety net. */
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;      /* handle crop drags without page scroll */
+  border-radius: 4px;
+}
+
+/* ---------- Tool panels ---------- */
+.tool-panels {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding: 10px 10px 6px;
+  min-height: 84px;
+}
+.panel { animation: fade 0.12s ease; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;      /* aspect chips stay on one line each */
+}
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.toggle-chip {
+  display: block;
+  width: auto;              /* compact centered pill, not a full-width bar */
+  max-width: 100%;
+  margin: 8px auto 0;
+  min-height: 44px;
+  padding: 8px 18px;
+  white-space: nowrap;
+  line-height: 1.2;
+  font-size: 13px;
+}
+.toggle-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.control-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+.control-label { font-size: 15px; font-weight: 600; }
+.control-value { font-size: 14px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+}
+.slider-tag { width: 30px; flex: none; font-size: 12px; color: var(--muted); }
+
+.step-btn {
+  flex: none;
+  width: 36px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.step-btn:active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step-btn:disabled { opacity: 0.4; cursor: default; }
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+}
+.orient-mirror { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 6px; }
+
+.rotate-row { display: flex; gap: 8px; }
+.rotate-row .chip {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+/* Range inputs — big touch thumbs */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;            /* allow the slider to shrink so the row never overflows */
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-y;     /* dragging the thumb never pans the page sideways */
+}
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: var(--panel-2); border-radius: 3px; }
+input[type="range"]::-moz-range-track { height: 6px; background: var(--panel-2); border-radius: 3px; }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 28px; height: 28px; margin-top: -11px;
+  border-radius: 50%; background: var(--accent); border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); border: 3px solid #fff;
+}
+input[type="range"]:disabled { opacity: 0.4; cursor: default; }
+
+/* ---------- Toggle switch ---------- */
+.switch { position: relative; display: inline-block; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track {
+  display: block; width: 64px; height: 44px; padding: 6px;
+  background: var(--panel-2); border-radius: 22px; transition: background 0.15s;
+}
+.switch-thumb {
+  display: block; width: 32px; height: 32px;
+  background: #fff; border-radius: 50%; transition: transform 0.15s;
+}
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(20px); }
+
+/* ---------- Bottom tab bar ---------- */
+.tabbar {
+  flex: none;
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tab {
+  flex: 1 1 0;
+  min-width: 0;             /* labels shrink instead of widening the bar */
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  border-top: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tab-ico { font-size: 17px; line-height: 1; }
+.tab.active { color: var(--accent); border-top-color: var(--accent); }
+
+/* ---------- Buttons ---------- */
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 54px; padding: 0 22px;
+  border: none; border-radius: var(--radius);
+  background: var(--accent); color: #fff;
+  font-size: 17px; font-weight: 700; cursor: pointer;
+}
+.btn-primary:active { background: var(--accent-press); }
+.btn-primary:disabled { background: var(--panel-2); color: var(--muted); cursor: default; }
+
+.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 48px; padding: 0 22px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel-2); color: var(--text);
+  font-size: 15px; font-weight: 600; cursor: pointer;
+}
+
+/* ---------- Export overlay ---------- */
+#view-editing { position: relative; }
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(10,11,13,0.85);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 20;
+}
+.progress { width: 220px; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s linear; }
+.progress-pct { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* Result overlay */
+.result-title { font-size: 19px; font-weight: 700; margin: 0; }
+.result-preview {
+  max-width: 78%;
+  max-height: 32vh;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #191b1f;
+}
+.overlay .btn-primary,
+.overlay .btn-secondary { width: 260px; max-width: 82vw; }
+#save-hint { max-width: 280px; text-align: center; }
+.press-tip {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-align: center;
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: 80px;
+  transform: translateX(-50%) translateY(20px);
+  background: #2a2d34; color: #fff;
+  padding: 12px 20px; border-radius: 24px;
+  font-size: 15px; font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  opacity: 0; transition: opacity 0.25s, transform 0.25s; z-index: 30;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

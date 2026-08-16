@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <title>GIF Editor</title>
+  <link rel="stylesheet" href="gif-editor.css?v=1">
+</head>
+<body>
+  <!-- single hidden file input reused by every "load" control (multiple files) -->
+  <input type="file" id="file-input" accept=".gif,image/gif,.webp,image/webp" multiple hidden>
+
+  <header class="app-header">
+    <button id="reset-btn" class="hdr-btn" hidden>＋ Aggiungi</button>
+    <h1>GIF Editor</h1>
+    <button id="export-btn" class="hdr-btn accent" hidden>Export</button>
+  </header>
+
+  <main class="app-main">
+
+    <!-- EMPTY -->
+    <section id="view-empty" class="view">
+      <div class="center-stack">
+        <p class="empty-msg">Carica una o più GIF o WebP dal tuo telefono per ritagliarle, tagliarne i frame, cambiarne la velocità e specchiarle. L'esportazione è sempre in GIF.</p>
+        <label for="file-input" class="upload-btn">📁 Scegli i file</label>
+        <p id="empty-error" class="inline-error" hidden></p>
+      </div>
+    </section>
+
+    <!-- LOADING -->
+    <section id="view-loading" class="view" hidden>
+      <div class="center-stack">
+        <div class="spinner"></div>
+        <p>Decodifica GIF…</p>
+      </div>
+    </section>
+
+    <!-- ERROR -->
+    <section id="view-error" class="view" hidden>
+      <div class="center-stack">
+        <p id="error-msg" class="inline-error">Qualcosa è andato storto.</p>
+        <label for="file-input" class="btn-secondary">Riprova</label>
+      </div>
+    </section>
+
+    <!-- PICKER: choose which of the loaded GIFs to edit -->
+    <section id="view-picker" class="view" hidden>
+      <div class="picker">
+        <p class="picker-title">Le tue GIF — tocca per modificare</p>
+        <div class="picker-grid" id="picker-grid"></div>
+        <label for="file-input" class="btn-secondary picker-add">＋ Aggiungi altre GIF</label>
+      </div>
+    </section>
+
+    <!-- EDITING -->
+    <section id="view-editing" class="view" hidden>
+      <div class="editor">
+
+        <div class="preview-wrap">
+          <canvas id="preview"></canvas>
+        </div>
+
+        <div class="tool-panels">
+          <!-- CROP -->
+          <div class="panel" data-tool="crop">
+            <div class="chip-row" id="crop-chips">
+              <button class="chip active" data-cropaspect="free">Libero</button>
+              <button class="chip" data-cropaspect="1:1">1:1</button>
+              <button class="chip" data-cropaspect="4:3">4:3</button>
+              <button class="chip" data-cropaspect="3:4">3:4</button>
+              <button class="chip" data-cropaspect="16:9">16:9</button>
+              <button class="chip" data-cropaspect="9:16">9:16</button>
+            </div>
+            <p class="hint">Trascina la cornice per spostarla, gli angoli per ridimensionarla.</p>
+          </div>
+
+          <!-- STRETCH / PROPORTIONS -->
+          <div class="panel" data-tool="stretch" hidden>
+            <div class="chip-row" id="stretch-chips">
+              <button class="chip active" data-stretch="original">Originale</button>
+              <button class="chip" data-stretch="1:1">1:1</button>
+              <button class="chip" data-stretch="4:3">4:3</button>
+              <button class="chip" data-stretch="3:4">3:4</button>
+              <button class="chip" data-stretch="16:9">16:9</button>
+              <button class="chip" data-stretch="9:16">9:16</button>
+            </div>
+            <p class="hint">Deforma l'immagine alle proporzioni scelte, senza ritagliare. <span id="stretch-dims"></span></p>
+          </div>
+
+          <!-- TRIM -->
+          <div class="panel" data-tool="trim" hidden>
+            <div class="control-head">
+              <span class="control-label">Frame</span>
+              <span id="trim-readout" class="control-value">0 – 0</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-tag">Inizio</span>
+              <button class="step-btn" data-step="start" data-dir="-1" aria-label="Frame iniziale precedente">◀</button>
+              <input type="range" id="trim-start" min="0" max="0" value="0">
+              <button class="step-btn" data-step="start" data-dir="1" aria-label="Frame iniziale successivo">▶</button>
+            </div>
+            <div class="slider-row">
+              <span class="slider-tag">Fine</span>
+              <button class="step-btn" data-step="end" data-dir="-1" aria-label="Frame finale precedente">◀</button>
+              <input type="range" id="trim-end" min="0" max="0" value="0">
+              <button class="step-btn" data-step="end" data-dir="1" aria-label="Frame finale successivo">▶</button>
+            </div>
+            <button id="onion-btn" class="chip toggle-chip" title="Confronta il primo e l'ultimo frame selezionati sovrapposti">👁 Primo / ultimo</button>
+            <p id="single-frame-note" class="hint" hidden>GIF statica (1 frame): taglio e velocità non disponibili.</p>
+          </div>
+
+          <!-- SPEED -->
+          <div class="panel" data-tool="speed" hidden>
+            <div class="control-head">
+              <span class="control-label">Velocità</span>
+              <span id="speed-readout" class="control-value">1.00×</span>
+            </div>
+            <div class="slider-row">
+              <button class="step-btn" data-step="speed" data-dir="-1" aria-label="Riduci velocità">◀</button>
+              <input type="range" id="speed" min="0.25" max="4" step="0.05" value="1">
+              <button class="step-btn" data-step="speed" data-dir="1" aria-label="Aumenta velocità">▶</button>
+            </div>
+          </div>
+
+          <!-- ORIENT: rotation + mirror -->
+          <div class="panel" data-tool="mirror" hidden>
+            <div class="control-head">
+              <span class="control-label">Rotazione</span>
+              <span id="rotation-readout" class="control-value">0°</span>
+            </div>
+            <div class="rotate-row">
+              <button id="rotate-left" class="chip" aria-label="Ruota a sinistra">↺ 90°</button>
+              <button id="rotate-right" class="chip" aria-label="Ruota a destra">↻ 90°</button>
+            </div>
+            <div class="row-between orient-mirror">
+              <span class="control-label">Specchia orizzontale</span>
+              <label class="switch">
+                <input type="checkbox" id="mirror">
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <nav class="tabbar" id="tabbar">
+          <button class="tab active" data-tool="crop"><span class="tab-ico">▣</span>Ritaglia</button>
+          <button class="tab" data-tool="stretch"><span class="tab-ico">⤢</span>Proporzioni</button>
+          <button class="tab" data-tool="trim"><span class="tab-ico">⇔</span>Taglio</button>
+          <button class="tab" data-tool="speed"><span class="tab-ico">⏩</span>Velocità</button>
+          <button class="tab" data-tool="mirror"><span class="tab-ico">⟲</span>Orienta</button>
+        </nav>
+
+      </div>
+
+      <!-- EXPORTING overlay -->
+      <div id="export-overlay" class="overlay" hidden>
+        <div class="center-stack">
+          <div class="spinner"></div>
+          <p>Generazione GIF…</p>
+          <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+          <p id="progress-pct" class="progress-pct">0%</p>
+        </div>
+      </div>
+
+      <!-- RESULT overlay: GIF ready, user chooses where to save -->
+      <div id="result-overlay" class="overlay" hidden>
+        <div class="center-stack">
+          <p class="result-title">✓ GIF pronta</p>
+          <img id="result-preview" class="result-preview" alt="Anteprima GIF esportata">
+          <p class="press-tip" id="press-tip" hidden>👆 Tieni premuto sull'immagine per salvarla</p>
+          <button id="save-btn" class="btn-primary">⬇ Salva GIF</button>
+          <button id="result-close" class="btn-secondary">Torna a modifica</button>
+          <p class="hint" id="save-hint"></p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- gif.js (encoder) exposes window.GIF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+  <!-- gifuct-js (decoder): published as CommonJS, so use jsDelivr's ESM bundle and expose on window -->
+  <script type="module">
+    import { parseGIF, decompressFrames } from 'https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/+esm';
+    window.gifuct = { parseGIF, decompressFrames };
+    window.dispatchEvent(new Event('gifuct-ready'));
+  </script>
+  <script src="gif-editor.js?v=1"></script>
+</body>
+</html>
