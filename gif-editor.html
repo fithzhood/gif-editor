@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>GIF Editor</title>
-  <link rel="stylesheet" href="gif-editor.css?v=3">
+  <link rel="stylesheet" href="gif-editor.css?v=4">
 </head>
 <body>
   <!-- single hidden file input reused by every "load" control (multiple files) -->
@@ -25,6 +25,8 @@
       <div class="center-stack">
         <p class="empty-msg">Carica GIF, WebP o un video dal tuo telefono per ritagliarli, tagliarne i frame, cambiarne la velocità e specchiarli. L'esportazione è sempre in GIF.</p>
         <label for="file-input" class="upload-btn">📁 Scegli i file</label>
+        <!-- only shown inside the APK, where screen capture actually exists -->
+        <button class="btn-secondary record-btn" hidden>⏺ Registra lo schermo</button>
         <p id="empty-error" class="inline-error" hidden></p>
       </div>
     </section>
@@ -33,7 +35,7 @@
     <section id="view-loading" class="view" hidden>
       <div class="center-stack">
         <div class="spinner"></div>
-        <p>Decodifica GIF…</p>
+        <p id="loading-msg">Decodifica GIF…</p>
       </div>
     </section>
 
@@ -53,6 +55,7 @@
         <p class="picker-title">Le tue GIF — tocca per modificare</p>
         <div class="picker-grid" id="picker-grid"></div>
         <label for="file-input" class="btn-secondary picker-add">＋ Aggiungi altre GIF</label>
+        <button class="btn-secondary picker-add record-btn" hidden>⏺ Registra lo schermo</button>
       </div>
     </section>
 
@@ -251,13 +254,13 @@
   <!-- Both libraries are served from this site, not a CDN: one less thing that
        can fail (an unreachable CDN used to break Export). -->
   <!-- gif.js (encoder) exposes window.GIF -->
-  <script src="lib/gif.js?v=3"></script>
+  <script src="lib/gif.js?v=4"></script>
   <!-- gifuct-js (decoder): CommonJS upstream, so we ship a self-contained ESM bundle -->
   <script type="module">
-    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=3';
+    import { parseGIF, decompressFrames } from './lib/gifuct.esm.js?v=4';
     window.gifuct = { parseGIF, decompressFrames };
     window.dispatchEvent(new Event('gifuct-ready'));
   </script>
-  <script src="gif-editor.js?v=3"></script>
+  <script src="gif-editor.js?v=4"></script>
 </body>
 </html>

@@ -56,6 +56,8 @@ const el = {
   videoOverlay: document.getElementById('video-overlay'),
   videoProgressBar: document.getElementById('video-progress-bar'),
   videoProgressText: document.getElementById('video-progress-text'),
+  recordBtns: Array.from(document.querySelectorAll('.record-btn')),
+  loadingMsg: document.getElementById('loading-msg'),
   pickerGrid: document.getElementById('picker-grid'),
   fileInput: document.getElementById('file-input'),
   emptyError: document.getElementById('empty-error'),
@@ -1167,11 +1169,94 @@ async function importVideoFrames() {
 }
 
 // =====================================================================
+// Screen capture (APK only)
+// =====================================================================
+// The browser cannot do this at all: a web page stops capturing the moment it
+// loses focus, and recording *another app* is exactly the point. So the capture
+// lives in a native plugin, which hands back an MP4 — and from there it is the
+// same road as any imported video.
+let srPlugin;
+
+function getSR() {
+  if (srPlugin !== undefined) return srPlugin;
+  srPlugin = null;
+  if (isCapacitorNative()) {
+    const C = window.Capacitor;
+    try {
+      srPlugin = C.registerPlugin
+        ? C.registerPlugin('ScreenRecorder')
+        : ((C.Plugins || {}).ScreenRecorder || null);
+    } catch (_) { srPlugin = null; }
+  }
+  return srPlugin;
+}
+
+async function startScreenRecording() {
+  const SR = getSR();
+  if (!SR) return;
+  try {
+    await SR.start();
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    if (m.indexOf('denied') >= 0) showToast('Registrazione non autorizzata');
+    else if (m.indexOf('already') >= 0) showToast('Registrazione già in corso');
+    else showToast('Non riesco ad avviare la registrazione');
+    return;
+  }
+  showToast('Registro. Ferma dalla notifica quando hai finito');
+  // Step aside so the user can reach whatever they want to record.
+  setTimeout(() => { try { SR.minimize(); } catch (_) {} }, 1200);
+}
+
+// The MP4 arrives in pieces. The page is served from a remote URL and cannot
+// read local files, and a single base64 string for a 20 MB video would spike
+// memory in the one app that must not do that.
+async function readNativeFile(SR, path, size) {
+  const CHUNK = 3 * 1024 * 1024;
+  const parts = [];
+  for (let off = 0; off < size; off += CHUNK) {
+    const res = await SR.readChunk({ path, offset: off, size: Math.min(CHUNK, size - off) });
+    if (!res || !res.data) break;
+    const bin = atob(res.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    parts.push(bytes);
+  }
+  return new Blob(parts, { type: 'video/mp4' });
+}
+
+// Called whenever the app comes back to the front: a finished recording is
+// waiting on disk, not delivered by an event the backgrounded page could miss.
+async function checkPendingRecording() {
+  const SR = getSR();
+  if (!SR || vimp.busy || state.ui.state === 'video') return;
+  let st;
+  try { st = await SR.getStatus(); } catch (_) { return; }
+  if (st.recording) return;
+  if (!st.path) {
+    if (st.error) { showToast('Registrazione non riuscita: ' + st.error); try { await SR.discard(); } catch (_) {} }
+    return;
+  }
+  try {
+    el.loadingMsg.textContent = 'Leggo la registrazione…';
+    setState('loading');
+    const blob = await readNativeFile(SR, st.path, st.size);
+    try { await SR.discard(); } catch (_) {}
+    el.loadingMsg.textContent = 'Decodifica GIF…';
+    if (!blob.size) { showToast('Registrazione vuota'); setState(state.projects.length ? 'picker' : 'empty'); return; }
+    openVideoImport(new File([blob], 'registrazione.mp4', { type: 'video/mp4' }));
+  } catch (_) {
+    el.loadingMsg.textContent = 'Decodifica GIF…';
+    showError('Non riesco a leggere la registrazione');
+  }
+}
+
+// =====================================================================
 // Export (gif.js)
 // =====================================================================
 // The worker ships with the app, so it is same-origin: gif.js can load it
 // directly, with no fetch that could fail when the network is flaky.
-const WORKER_URL = 'lib/gif.worker.js?v=3';
+const WORKER_URL = 'lib/gif.worker.js?v=4';
 
 async function exportGif() {
   if (state.ui.state !== 'editing' || !validTrim()) return;
@@ -1396,8 +1481,15 @@ function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 function initCapacitor() {
   if (!isCapacitorNative()) return;
   document.body.classList.add('capacitor');   // enables status-bar spacing in CSS
+
+  if (getSR()) {
+    el.recordBtns.forEach(b => { b.hidden = false; });
+    checkPendingRecording();                  // opened from the "ready" notification?
+  }
+
   const App = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
   if (!App || !App.addListener) return;
+  App.addListener('appStateChange', s => { if (s && s.isActive) checkPendingRecording(); });
   App.addListener('backButton', () => {
     if (!el.exportOverlay.hidden) return;                       // busy exporting: ignore
     if (!el.resultOverlay.hidden) { closeResult(); return; }    // result -> editor
@@ -1438,6 +1530,7 @@ el.stretchChips.forEach(ch => ch.addEventListener('click', () => {
   render();
 }));
 
+el.recordBtns.forEach(b => b.addEventListener('click', startScreenRecording));
 el.videoStart.addEventListener('input', onVideoStartInput);
 el.videoDur.addEventListener('input', onVideoDurInput);
 el.videoSteps.forEach(b => b.addEventListener('click',
