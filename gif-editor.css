@@ -225,7 +225,10 @@ body.capacitor .app-header {
 /* The preview shrinks first when the screen is short, so the controls and the
    two action buttons are never pushed off the bottom. */
 .vstage {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  /* Capped so a tall phone screen can't let the preview push the cost readout
+     and the buttons off the bottom. */
+  max-height: 32vh;
   min-height: 70px;
   display: flex;
   align-items: center;
@@ -252,8 +255,9 @@ body.capacitor .app-header {
   font-weight: 600;
   color: var(--muted);
 }
+.vcost { flex: none; }
 .vestimate {
-  margin: 12px 0 0;
+  margin: 0;
   padding: 9px 11px;
   background: var(--panel);
   border: 1px solid var(--border);
